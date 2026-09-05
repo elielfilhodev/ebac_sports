@@ -1,46 +1,91 @@
-# Getting Started with Create React App
+# EBAC Sports — Migração de `useState` para Redux Toolkit
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+Projeto do exercício da EBAC refatorado: o gerenciamento de estado local
+(`useState` + `useEffect` + `fetch` dentro do `App`) foi substituído por
+**Redux Toolkit**, com **RTK Query** para o estado de servidor.
 
-## Available Scripts
+## Requisitos do exercício
 
-In the project directory, you can run:
+| Requisito | Onde está |
+| --- | --- |
+| Usar o Redux Toolkit | `src/store/index.ts` (`configureStore`) |
+| Criar um slice para o carrinho | `src/store/reducers/carrinho.ts` (`createSlice`) |
+| Usar RTK Query para as requisições | `src/services/api.ts` (`createApi` + `useGetProdutosQuery`) |
+| Usar `useSelector` | `src/store/hooks.ts` (`useAppSelector`), consumido em `Header` e `Produto` |
+| Usar `useDispatch` | `src/store/hooks.ts` (`useAppDispatch`), consumido em `Produto` |
 
-### `npm start`
+## Arquitetura
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+```
+src/
+├── types/                # contratos de domínio (Produto)
+├── utils/                # funções puras (paraReal)
+├── services/
+│   └── api.ts            # RTK Query: cache, loading, erro, validação de payload
+├── store/
+│   ├── index.ts          # configureStore + RootState/AppDispatch
+│   ├── hooks.ts          # useAppSelector / useAppDispatch tipados
+│   ├── selectors.ts      # leitura memoizada do estado (createSelector)
+│   ├── reducers/
+│   │   ├── carrinho.ts   # slice do carrinho
+│   │   └── favoritos.ts  # slice de favoritos
+│   └── __tests__/        # testes unitários dos reducers e selectors
+├── components/           # Header e Produto (conectados ao store)
+└── containers/           # Produtos (consome o hook do RTK Query)
+```
 
-The page will reload if you make edits.\
-You will also see any lint errors in the console.
+### Decisões e o "porquê"
 
-### `npm test`
+**Estado de servidor ≠ estado de cliente.** A lista de produtos vem da API e é
+gerenciada pelo RTK Query (cache, deduplicação, `isLoading`/`isError`,
+cancelamento no unmount). Carrinho e favoritos são estado de cliente e vivem em
+slices próprios. Misturar os dois no mesmo lugar é a origem clássica de bugs de
+sincronização.
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+**Slices separados por domínio.** Carrinho e favoritos têm ciclos de vida
+distintos. Um slice único faria o `Header` re-renderizar por mudanças que não
+lhe dizem respeito.
 
-### `npm run build`
+**Reducers puros.** O `alert('Item já adicionado')` ficou na camada de UI. Um
+efeito colateral dentro do reducer quebraria replay de ações, time-travel
+debugging e testes determinísticos. O reducer `adicionar` é idempotente como
+segunda linha de defesa.
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+**Selectors centralizados e memoizados.** Nenhum componente lê
+`state.carrinho.itens` diretamente. Derivados (`valorTotal`, `Set` de ids) usam
+`createSelector` para não recriar objetos a cada render — o que dispararia
+re-render em loop no `useSelector`, que compara por referência.
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+**Fim do prop drilling.** `App` deixou de repassar quatro props por dois níveis.
+`Header` e `Produto` assinam apenas a fatia de estado que consomem.
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+**Hooks tipados.** `useAppSelector` / `useAppDispatch` evitam anotar `RootState`
+em cada componente e garantem autocomplete.
 
-### `npm run eject`
+### Notas de segurança
 
-**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
+- **Validação de payload em runtime** (`ehProduto` em `src/services/api.ts`):
+  TypeScript só valida em tempo de compilação; o que chega da rede é `any`. A
+  guarda impede que um contrato quebrado da API entre na árvore de estado.
+- **Mensagens de erro genéricas** na UI: não expõem host, status interno nem
+  stack trace.
+- **URL base sem interpolação de input do usuário**, com override opcional via
+  `REACT_APP_API_URL` — sem host fixo no bundle em produção.
+- **CI com `npm ci` + `npm audit`**: build reprodutível pelo lockfile e
+  verificação de vulnerabilidades conhecidas nas dependências.
 
-If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+## Como rodar
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
+```bash
+npm install
+npm start          # http://localhost:3000
+npm test           # testes dos reducers e selectors
+npm run build      # build de produção
+npx eslint "src/**/*.{ts,tsx}"
+```
 
-You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
+## Variáveis de ambiente (opcional)
 
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
+```bash
+REACT_APP_API_URL=https://api-ebac.vercel.app/api/
+```
